@@ -1,0 +1,1101 @@
+---
+params:
+  country: Uzbekistan
+  date: 17Apr24
+  nbsap: TRUE
+output: 
+  officedown::rdocx_document:
+    reference_docx: templatee.docx
+    plots:
+      style: Normal
+      align: center
+      topcaption: true
+header-includes:
+  - \usepackage{floatrow}
+  - \floatsetup[figure]{capposition=top}
+---
+
+```{r setupPackages, include=FALSE}
+# moves away from scientific notation (e-17)
+options(scipen = 999)
+
+# mounts packages
+pacman::p_load("tidyverse", "knitr", "stringr", "readr", "openxlsx", "writexl", "readxl", 
+               "ggplot2", "ggpattern", "ggnewscale", "ggpubr", "geomtextpath", "ggbeeswarm", 
+               "officedown", "officer", "flextable", "kableExtra",
+               "magrittr", "captioner", "rvest", 
+               "countries") 
+```
+
+```{r setupScript, include=FALSE}
+# Officedown/Markdown configurations
+opts_chunk$set(echo = FALSE, 
+               fig.cap = TRUE, fig.cap.pre="", fig.cap.sep="")
+
+set_flextable_defaults(font.family = "Calibri", hansi.family = "Calibri", font.size = 9)
+
+bl_template <- function(txt) {
+  block_list(
+    fpar(values = txt, fp_t = fp_text_lite(color = "#0001a4", bold = TRUE))
+  )
+}
+sec_port <- prop_section()
+
+sec_land <- prop_section(page_size = page_size(orient = "landscape"), 
+    type = "continuous", page_margins = page_mar(top = 0, right = 0, bottom = 0, left = 0))
+
+sec_toc <- prop_section(page_size = page_size(orient = "portrait"), 
+    type = "continuous", page_margins = page_mar(bottom = 0))
+
+links <- fp_text(color = "#0563C1", underlined = TRUE, font.size = 10, font.family = "Calibri")
+links_i <- fp_text(color = "#0563C1", underlined = TRUE, font.size = 10, italic = TRUE, font.family = "Calibri")
+section <- fp_text(font.size = 16, bold = TRUE, font.family = "Calibri")
+subsection <- fp_text(font.size = 14, bold = TRUE, font.family = "Calibri")
+caption1 <- fp_text(font.size = 11, font.family = "Calibri")
+caption2 <- fp_text(font.size = 11, font.family = "Calibri", bold = TRUE)
+```
+
+\pagenumbering{gobble}
+
+```{r dataImport, include=FALSE}
+# ensures that composite country names are separated by "_"; adapts for special cases (conditinoal)
+if (params$country == "Kazakhstan") { 
+  cfill <- paste0(params$country, "ZEP") # C30, N99
+} else {
+  cfill <- str_replace_all(params$country, " ", "_")
+}
+
+# sets path and file name (conditional)
+if (params$nbsap == TRUE) { 
+  path <- "../data/similarity_results/"
+} else {
+  path <- "../data/similarity_results/non-nbts/"
+}
+
+# Uploading the data
+dta <- read.csv(paste0(path, "UNDP_LLM_Assessment_", cfill, "_enterprise_", params$date, ".csv"))
+
+# ISO2 codes (to reach the country's page on the CBD NBT website)
+iso2 <- tolower(country_name(params$country, to = "ISO2"))
+
+# GBF Goals & Targets translations from https://www.cbd.int/doc/decisions/cop-15/cop-15-dec-04-fr.pdf
+gbf_tr <- read.xlsx("./references/translations/gbf.xlsx")
+```
+
+```{r tweak1, include=FALSE}
+# National Biodiversity Targt or other term
+if (params$nbsap == FALSE) {
+  nbtalt <- "national biodiversity targets" #"actions"
+} else {
+  nbtalt <- "national biodiversity targets"
+}
+
+# alignment /similarity terms:
+term <- "Similarity" # Alignment
+terms <- c("Low", "Medium", "High") # c("Partial", "Moderate", "Strong")
+termss <- "None"
+
+# renames columns
+dta <- dta %>% 
+  select(-any_of(c("X", "Unnamed..3", "Unnamed..4", "index", "index.1"))) %>% 
+  mutate(generated_sample = substr(generated_sample, 2, nchar(generated_sample)), 
+         scr = substr(generated_sample, 1, str_locate(generated_sample, "#")-2),
+         dsc = substr(generated_sample, str_locate(generated_sample, "#")+1, nchar(generated_sample)))
+colnames(dta) <- c("cnt", "nbt_title", "nbt_txt", "gbf_ttl", "gbf_txt", "llm_smpl", "nbt_n", "nbt_t", "nbt_ttl", "llm_scr", "llm_dscr")
+
+# Quick test
+if (length(unique(dta$cnt)) != 1) {stop()}
+
+# eliminates unnecessary columns; eliminates cases where a score "exists" between a GBF Goal or Target and no NBT
+dta <- dta %>% 
+  select(nbt_title, nbt_ttl, nbt_txt, nbt_t, nbt_n, gbf_ttl, gbf_txt, llm_scr, llm_dscr) %>% 
+  filter(nbt_txt != "")
+
+# adjusts the titles of the GBF Goals and Targets
+dta$gbf_ttl <- substr(dta$gbf_txt, 1, str_locate(dta$gbf_txt, "\\.") - 1)
+dta$gbf_txt <- substr(dta$gbf_txt, str_locate(dta$gbf_txt, "\\.") + 2, nchar(dta$gbf_txt))
+dta$gbf_ttl <- trimws(dta$gbf_ttl)
+
+# adjusts the titles of the National Targets
+dta$nbt_title <- ifelse(substr(dta$nbt_title, nchar(dta$nbt_title), nchar(dta$nbt_title)) == ".", 
+                      substr(dta$nbt_title, 1, nchar(dta$nbt_title)-1), dta$nbt_title)
+dta$nbt_n <- ifelse(substr(dta$nbt_n, nchar(dta$nbt_n), nchar(dta$nbt_n)) == ".", 
+                      substr(dta$nbt_n, 1, nchar(dta$nbt_n)-1), dta$nbt_n)
+dta$nbt_ttl <- ifelse(substr(dta$nbt_ttl, nchar(dta$nbt_ttl), nchar(dta$nbt_ttl)) == ".", 
+                      substr(dta$nbt_ttl, 1, nchar(dta$nbt_ttl)-1), dta$nbt_ttl)
+dta$nbt_ttl <- factor(dta$nbt_ttl, levels = unique(dta$nbt_ttl))
+
+# number of National Targets
+nbr <- length(levels(dta$nbt_ttl))
+
+# creates LOW, MEDIUM and HIGH categories; based-off of the scores
+dta$llm_scr <- as.numeric(gsub("\\,", "\\.", dta$llm_scr))
+dta$cat <- ifelse(dta$llm_scr == 0, "None", 
+                    ifelse((dta$llm_scr > 0 & dta$llm_scr < 0.333), "Low", 
+                           ifelse(dta$llm_scr > 0.667, "High", "Medium")))
+dta$cat <- factor(dta$cat, levels = c("None", "Low", "Medium", "High"), labels = append(termss, terms))
+
+# ensures categorical values are as such
+gbf_tr$gbf_ttl <- factor(gbf_tr$gbf_ttl, levels = unique(dta$gbf_ttl))
+dta$gbf_ttl <- factor(dta$gbf_ttl, levels = levels(gbf_tr$gbf_ttl))
+
+# ensures we're using the correct language for the GBF G&Ts
+gbf_tr <- gbf_tr %>% select(gbf_ttl, txt_en) ### ENGLISH ###
+
+# adjusts line-breaks in the GBF G&Ts
+gbf_tr$txt_en[19] <- gsub("\r\n", " ", gbf_tr$txt_en[19]) ### ENGLISH ###
+gbf_tr$txt_en[23] <- gsub("\r\n", " ", gbf_tr$txt_en[23]) ### ENGLISH ###
+
+# ensuring the NBTs and GBF G&T are correct
+dta <- dta %>% 
+  select(-gbf_txt) %>% 
+  left_join(gbf_tr) %>% 
+  rename(gbf_txt = txt_en) ### ENGLISH ###
+
+# ensures the 1st letter of all NBTs and GBF G&Ts are captalised
+dta$nbt_txt <- str_replace(dta$nbt_txt, "^\\w{1}", toupper)
+dta$gbf_txt <- str_replace(dta$gbf_txt, "^\\w{1}", toupper)
+
+# ensures there are no consecutive spaces in text
+dta$gbf_txt <- gsub("\\s+", "\\ ", dta$gbf_txt)
+dta$nbt_txt <- gsub("\\s+", "\\ ", dta$nbt_txt)
+dta$llm_dscr <- gsub("\\s+", "\\ ", dta$llm_dscr)
+```
+
+```{r nbt_term, include=FALSE}
+# isolates the name in the NBT title
+nbt <- unique(dta$nbt_t)
+
+# condition: 1 NBT term (0), otherwise (1)
+if (length(nbt) != 1) {
+  cond <- 1
+} else {
+  cond <- 0
+}
+
+# makes additional country-specific tweaks (mostly, NBT term-related)
+if (cfill == "KazakhstanN99") {
+  dta$nbt_t <- ifelse(dta$nbt_t == "", substr(dta$nbt_n, 1, 2), dta$nbt_t)
+  dta$nbt_n <- ifelse(substr(dta$nbt_n, 1, 1) == "2", substr(dta$nbt_n, 3, nchar(as.character(dta$nbt_n))), dta$nbt_n)
+  dta$nbt_n <- ifelse(dta$nbt_n == "", gsub("\\D", "", dta$nbt_ttl), dta$nbt_n)
+}
+
+# Ensures the NBT numbers are factors, rather than numerical
+if (params$country == "Lebanon" & params$nbsap == FALSE) {
+  dta$nbt_ttl <- ifelse(dta$nbt_title == "Action 18.10", as.character(substr(dta$nbt_title, nchar(as.character(dta$nbt_title)) - 4, nchar(as.character(dta$nbt_title)))), as.character(dta$nbt_ttl))
+  dta$nbt_t <- factor(dta$nbt_t, levels = unique(dta$nbt_t))
+  dta$nbt_n <- factor(dta$nbt_n, levels = unique(dta$nbt_n))
+} else if (params$country == "South Africa") {
+  dta$nbt_title <- ifelse(dta$nbt_t == "", paste0("Outcome ", dta$nbt_title), dta$nbt_title)
+  dta$nbt_t <- ifelse(dta$nbt_t == "", "Outcome ", dta$nbt_t)
+  dta$nbt_n <- factor(dta$nbt_n, levels = as.character(sort(as.numeric((unique(dta$nbt_n))))))
+} else if (params$country == "Maldives" | params$country == "Trinidad" | cfill == "KazakhstanZEP") {
+  dta$nbt_n <- factor(dta$nbt_n, levels = unique(dta$nbt_n))
+} else {
+  dta$nbt_n <- factor(dta$nbt_n, levels = as.character(sort(as.numeric((unique(dta$nbt_n))))))
+}
+```
+
+```{r scrape, include=FALSE}
+# link to country's CBD-NBT repository and NBSAP references
+if (params$nbsap == TRUE) {
+  lnk <- paste0("https://www.cbd.int/reports/search/?country=", iso2)
+  rep <- read_html(lnk) %>% html_nodes(".dgPager+ .cmsTable .cmsBold+ div") %>% html_text()
+  year <- read_html(lnk) %>% html_nodes(".dgPager+ .cmsTable #ctl13_W7619_DDate") %>% html_text() %>% substr(1, 4)
+  if (is_empty(year)) {year <- read_html(lnk) %>% html_nodes("#ctl15_W7619_DDate") %>% html_text() %>% substr(1, 4) %>% .[1]}
+} else {
+  if (params$country == "Bahamas"){ 
+    lnk <- "https://www.cbd.int/doc/world/bs/bs-nr-04-en.doc"
+    rep <- "The Fourth National Biodiversity Report of the Bahamas to the UNCDB"
+    year <- "2011"
+  } else if (params$country == "Kazakhstan") {
+    if (cfill == "KazakhstanC30") {
+      lnk <- "https://www.cbd.int/doc/nr/nr-06/kz-nr-06-en.pdf"
+      rep <- "Concept for Conservation and Sustainable Use of the Biological Diversity of the Republic of Kazakhstan Until 2030"
+      year <- "2015"
+    } else if (cfill == "KazakhstanN99") {
+      lnk <- "https://www.cbd.int/doc/world/kz/kz-nbsap-01-en.pdf"
+      rep <- "National Strategy and Action Plan on Conservation and Sustainable Use of Biodiversity of the Republic of Kazakhstan"
+      year <- "1999"
+    } else if (cfill == "KazakhstanZEP") {
+      lnk <- ""
+      rep <- "Zhasyl Yel Program"
+      year <- "2012"
+    }
+  } else if (params$country == "Uzbekistan") {
+    lnk <- "https://lex.uz/docs/4372841#4376248"
+    rep <- "Strategy for the Conservation of Biological Diversity in the Republic of Uzbekistan for the Period 2019-2028"
+    year <- ""
+  } else if (params$country == "Guyana") {
+    lnk <- "https://www.cbd.int/doc/world/gy/gy-nbsap-v3-en.pdf"
+    rep <- "National Biodiversity Strategy and Action Plan (2012-2020)"
+    year <- "2014"
+  } else if (params$country == "Grenada") {
+    lnk <- "https://www.cbd.int/doc/world/gd/gd-nbsap-01-en.pdf"
+    rep <- "Biodiversity Strategy and Action Plan"
+    year <- "2000"
+  } else if (params$country == "Lebanon") {
+    lnk <- "https://www.cbd.int/doc/world/lb/lb-nbsap-v2-en.pdf"
+    rep <- "National Biodiversity Strategy and Action Plan"
+    year <- "2016"
+}
+}
+```
+
+```{r subset1, include=FALSE}
+# sub-sets data, giving count of NBTs per category per GBF Goal or Target
+dtgr0 <- dta %>% select(gbf_ttl, cat) %>% 
+  table() %>% as_tibble() %>% 
+  filter(cat != termss) %>% 
+  filter(gbf_ttl %in% levels(dta$gbf_ttl)[1:4]) %>% 
+  mutate(catt = paste(cat, substr(gbf_ttl, 10,10)))
+levels(dtgr0$gbf_ttl) <- levels(dta$gbf_ttl)[1:4]
+
+# sub-sets data, giving a count of NBTs per category per GBF Goal or Target
+dtaa <- dta %>% select(gbf_ttl, cat) %>% 
+  table() %>% as_tibble() %>% 
+  filter(cat != termss)
+dtaa$gbf_ttl <- factor(dtaa$gbf_ttl, levels = levels(dta$gbf_ttl))
+dtaa$cat <- factor(dtaa$cat, levels = terms)
+
+# sub-sets data, giving a count of the number of pairings per category
+dtax <- dtaa %>% 
+  select(-gbf_ttl) %>% 
+  group_by(cat) %>% 
+  summarise(n = sum(n))
+
+# sub-sets data, giving total number of similarities by GBF Goal
+dtgr000 <- dtgr0 %>% 
+  group_by(gbf_ttl) %>% 
+  summarise(n = sum(n)) %>% 
+  arrange(desc(n))
+```
+
+```{r subset2, include=FALSE, warning=FALSE}
+# sub-sets data, giving a count of NBTs per GBF Goal or Target (ordered)
+dtaaa <- dtaa %>% select(gbf_ttl, n) %>% 
+  group_by(gbf_ttl) %>% summarise(n = sum(n)) %>% 
+  arrange(desc(n))
+```
+
+```{r subset3, include=FALSE}
+# sub-set of data, giving NBTs with no parallel GBF Goals or Targets
+idtgr <- dta %>% select(nbt_ttl, cat) %>% 
+  table() %>% as_tibble() %>% 
+  pivot_wider(names_from = cat, values_from = n) %>% 
+  mutate(nn = rowSums(.[3:5])) %>% 
+  select(nbt_ttl, nn) %>% 
+  filter(nn == 0)
+```
+
+<!---BLOCK_MULTICOL_START--->
+
+::: {custom-style="Col1"}
+**What** we did
+:::
+
+<br>
+
+::: {custom-style="Col1"}
+**How** we did it
+:::
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+::: {custom-style="Col1"}
+**Why** we did it
+:::
+
+::: {custom-style="Col2"}
+`r run_columnbreak()`The UNDP Early Action Support Project team conducted an **analysis of the `r tolower(term)` between the `r nbr` `r nbtalt` of `r params$country`'s `r year` "[`r rep`](`r lnk`)"** and the **4 goals and 23 targets of the [Kunming-Montreal Global Biodiversity Framework](https://www.cbd.int/doc/decisions/cop-15/cop-15-dec-04-en.pdf)**.
+
+<br>
+
+We used Natural Language Processing, namely OpenAI's Generative Pre-trained Transformers (GPT-3.5), to assess the `r tolower(term)` between each of the national and global goals and targets.
+
+The **`r tolower(term)`** classifications we provide are:
+:::
+
+::: {custom-style="Col2"}
+- **`r terms[3]`**: The national and global goal or target appear to have significant overlap, containing the same overall objectives and major themes.
+
+- **`r terms[2]`**: The national and global goal or target appear to contain some of the same objectives and/or themes, although there are likely opportunities to update or revise the national targets for increased `r tolower(term)`.
+
+- **`r terms[1]`**: The national and global goal or target appear to contain a few of the same objectives and/or themes, although there are many opportunities to update or revise the national targets for increased `r tolower(term)`. 
+
+- **`r termss`**: The national and global goal or target do not appear to contain `r tolower(term)` objectives or themes. In these cases, we conduct no further analysis of the national and global goal or target pairing.
+:::
+
+<br>
+
+::: {custom-style="Col2"}
+This policy summary can inform a country-led process to align national targets with the Kunming-Montreal Global Biodiversity Framework and support subsequent NBSAP revision or update. The policy summary highlights key findings that are elaborated in a more detailed assessment for `r params$country`.
+:::
+
+<!---BLOCK_MULTICOL_STOP{widths: [1.75, 4.25], sep: false}--->
+
+::: {custom-style="Col1"}
+What we **found** - Global Goals
+:::
+
+```{r}
+fill0 <- paste0(params$country, '’s ', nbtalt)
+```
+
+::: {custom-style="Heading 2"}
+`r term` between `r fill0` and the four goals of the Kunming-Montreal Global Biodiversity Framework
+:::
+
+<br>
+
+```{r text_aux1, include=FALSE}
+# number of GBF Goals or Targets with at least one NBT parallel (for text)
+text_aux <- ifelse(is.na(table(dtgr000$n == 0)[2]), "each", 4 - table(dtgr000$n == 0)[2])
+
+# text for the GBF Goal with the least number of similarities (for text)
+if (0 %in% dtgr000$n == FALSE){
+  goals1 <- paste0("The lowest number of similar ", nbtalt, " is observed in ", dtgr000$gbf_ttl[4], " (", dtgr000$n[4], ")")
+} else {
+  goals1 <- paste0(dtgr000$gbf_ttl[4], " has no similar ", nbtalt)
+}
+```
+
+```{r grf_aux0, include=FALSE}
+# creates the colour palette used in most graphics
+cols <- c("#AFFF57", "#59DC3D", "#00A54A", "white")
+names(cols) <- c("Low", "Medium", "High", "NBT")
+
+# enables a number/letter to be drawn atop a legend key
+  keyl <- c("1")
+  names(keyl) <- c("NBT")
+
+  draw_key_cust <- function(data, params, size) {
+    data_text <- data
+    data_text$label <- keyl[names(cols)[match(data$fill, cols)]]
+    data_text[c("fill")] <- NULL
+    data_text$colour <- "black"
+    data_text$alpha <- 1
+    data_text$size <- 11 / .pt
+  
+  grid::grobTree(
+    draw_key_dotplot(data, list()),
+    draw_key_text(data_text, list())
+  )
+  }
+  
+b_size <- 7
+bt_size <- 2.5
+```
+
+```{r subset4, include=FALSE}
+# subsets for the rings in the 3 "flower" figures
+dta$gbf_ttl <- factor(dta$gbf_ttl, levels = unique(dta$gbf_ttl))
+
+dtgr <- dta %>% 
+  filter(llm_scr != 0) %>% 
+  select(any_of(c("gbf_ttl", "nbt_ttl", "cat")))
+dtgr$cat <- dtgr$cat %>% 
+  droplevels(termss)
+dtgr <- dtgr %>% 
+  arrange(cat, gbf_ttl) %>% 
+  mutate(aux = paste0(gbf_ttl, cat))
+dtgr$auxx <- NA
+dtgr$auxx[1] <- 1
+for (i in 2:length(dtgr$aux)){
+  dtgr$auxx[i] <- ifelse(dtgr$aux[i] == dtgr$aux[i-1], dtgr$auxx[i-1] + 1, 1)
+}
+
+# finds if any GBF Goal or Target has 0 similarities and ensures this doesn't affect the visual representation of that GBF Goal or Target
+gbf_ttl <- setdiff(levels(dtgr$gbf_ttl), unique(dtgr$gbf_ttl))
+if (length(gbf_ttl[grep("^T", gbf_ttl)]) >= 1) {
+  txt <- str_trim(gsub("\\D", "", gbf_ttl[grep("^T", gbf_ttl)][1]))
+  for (i in 2:length(gbf_ttl[grep("^T", gbf_ttl)])) {
+    if (i == length(gbf_ttl[grep("^T", gbf_ttl)])){txt <- paste0(txt, ", and ", str_trim(gsub("\\D", "", gbf_ttl[grep("^T", gbf_ttl)][i])))}
+    else {txt <- paste0(txt, ", ", str_trim(gsub("\\D", "", gbf_ttl[grep("^T", gbf_ttl)][i])))}
+  }
+  txt <- paste0("The global targets that lack aligned ", nbtalt, " are: Targets ", txt, ".")
+} else if (length(gbf_ttl[grep("^T", gbf_ttl)]) == 1) {
+  txt <- paste0("A single global target lacks alignment with any of the ", nbtalt, ": ", gbf_ttl)
+} else {
+  txt <- ""
+  gbf_ttl <- NA
+}
+
+dtgr_d <- data.frame(gbf_ttl, nbt_ttl = NA, cat = NA, aux = NA, auxx = NA)
+dtgr <- rbind(dtgr, dtgr_d)
+dtgr$gbf_ttl <- factor(dtgr$gbf_ttl, levels = levels(dta$gbf_ttl))
+
+dtgr_tbl <- dtgr %>% select(gbf_ttl, cat) %>% group_by(gbf_ttl) %>% table() %>% as_tibble() %>% 
+  pivot_wider(names_from = cat, values_from = n)
+```
+
+```{r grf_aux1, warning=FALSE, echo=FALSE, message=FALSE}
+# sub-sets data, giving NBT number, GBF Target, category and position (for "flower" plot 1)
+dtgr_tbl1 <- dtgr_tbl %>% 
+  filter(gbf_ttl %in% levels(dta$gbf_ttl)[1:4])
+dtgr1 <- dtgr %>% 
+  filter(gbf_ttl %in% levels(dta$gbf_ttl)[1:4])
+dtgr1$auxxx <- NA
+
+# inner ring
+bh1 <- max(dtgr_tbl1[[terms[3]]])
+h1 <- 1; brh1 <- 1; bdh1 <- 0 # change for number of balls per ring
+if (is_empty(dtgr1$auxxx[dtgr1$cat == terms[3]]) == FALSE) {
+  while (bh1 > 0) {
+    dtgr1$auxxx[dtgr1$cat == terms[3] & (bdh1 < dtgr1$auxx & dtgr1$auxx <= bdh1 + brh1)] <- 3*h1
+    bh1 <- bh1 - brh1
+    h1 <- h1 + 1; bdh1 <- bdh1 + brh1; brh1 <- brh1 + 1
+  }}
+# intermediary ring
+bm1 <- max(dtgr_tbl1[[terms[2]]])
+m1 <- 1; brm1 <- 3; bdm1 <- 0 # change for number of balls per ring
+if (is_empty(dtgr1$auxxx[dtgr1$cat == terms[2]]) == FALSE) {
+  while (bm1 > 0) {
+    dtgr1$auxxx[dtgr1$cat == terms[2] & (bdm1 < dtgr1$auxx & dtgr1$auxx <= bdm1 + brm1)] <- 3*m1
+    bm1 <- bm1 - brm1
+    m1 <- m1 + 1; bdm1 <- bdm1 + brm1; brm1 <- brm1 + 1
+  }}
+# outer ring
+bl1 <- max(dtgr_tbl1[[terms[1]]])
+l1 <- 1; bdl1 <- 0; brl1 <- 5 # change for number of balls per ring
+if (is_empty(dtgr1$auxxx[dtgr1$cat == terms[1]]) == FALSE) {
+  while (bl1 > 0) {
+    dtgr1$auxxx[dtgr1$cat == terms[1] & (bdl1 < dtgr1$auxx & dtgr1$auxx <= bdl1 + brl1)] <- 3*l1
+    bl1 <- bl1 - brl1
+    l1 <- l1 + 1; bdl1 <- bdl1 + brl1; brl1 <- brl1 + 1
+  }}
+
+dtgr1$catt <- paste0(dtgr1$cat, dtgr1$auxxx)
+levels(dtgr1$catt) <- c(paste0(terms[1], max(ifelse(l1 == 1, 1, 3*(l1-1)), 4):1), 
+                        paste0(terms[2], max(ifelse(m1 == 1, 1, 3*(m1-1)), 4):1), 
+                        paste0(terms[3], max(ifelse(h1 == 1, 1, 3*(h1-1)), 3):0))
+
+dtgr1_aux <- as.data.frame(levels(dtgr1$catt)) %>% 
+  rename(catt = "levels(dtgr1$catt)") %>% 
+  mutate(y = dim(.)[1]:1)
+
+dtgr1 <- dtgr1 %>% 
+  select(any_of(c("gbf_ttl", "nbt_ttl", "cat", "catt")))
+
+dtgr1 <- dtgr1 %>% 
+  mutate(gbf_ttl = droplevels(gbf_ttl)) %>% 
+  filter(complete.cases(.)) %>% 
+  group_by(catt, gbf_ttl) %>% 
+  mutate(n = (row_number() - mean(n()))/n(),
+         n = (n - mean(n))*0.9 + as.numeric(gbf_ttl)) %>% 
+  left_join(dtgr1_aux)
+
+rect1 <- data.frame(x0 = c(0.5, 0.5, 0.5), xn = c(4.5, 4.5, 4.5), 
+                    y0 = c(max(ifelse(h1 == 1, 1, 3*(h1-1)), 3) + max(ifelse(m1 == 1, 1, 3*(m1-1)), 4) + 3, 
+                           max(ifelse(h1 == 1, 1, 3*(h1-1)), 3) + 2, 
+                           0), 
+                    yn = c(max(ifelse(h1 == 1, 1, 3*(h1-1)), 3) + max(ifelse(m1 == 1, 1, 3*(m1-1)), 4) + max(ifelse(l1 == 1, 1, 3*(l1-1)), 4) + 4, 
+                           max(ifelse(h1 == 1, 1, 3*(h1-1)), 3) + max(ifelse(m1 == 1, 1, 3*(m1-1)), 4) + 3, 
+                           max(ifelse(h1 == 1, 1, 3*(h1-1)), 3) + 2), 
+                    lab = factor(terms, levels = terms))
+```
+
+```{r clean3}
+rm(dtgr_tbl1, dtgr1_aux, bh1, h1, bdh1, brh1, bm1, m1, bdm1, brm1, bl1, l1, bdl1, brl1)
+```
+
+```{r grf_aux2, warning=FALSE, echo=FALSE, message=FALSE}
+# sub-sets data, giving NBT number, GBF Target, category and position (for "flower" plot 2)
+slc <- 5:15
+dtgr_tbl2 <- dtgr_tbl %>% 
+    filter(gbf_ttl %in% levels(dta$gbf_ttl)[slc])
+dtgr2 <- dtgr %>% 
+  filter(gbf_ttl %in% levels(dta$gbf_ttl)[slc])
+dtgr2$auxxx <- NA
+
+# inner ring
+bh2 <- max(dtgr_tbl2[[terms[3]]])
+h2 <- 1; bdh2 <- 0; brh2 <- 1 # change for number of balls per ring
+if (is_empty(dtgr2$auxxx[dtgr2$cat == terms[3]]) == FALSE) {
+  while (bh2 > 0) {
+    dtgr2$auxxx[dtgr2$cat == terms[3] & (bdh2 < dtgr2$auxx & dtgr2$auxx <= bdh2 + brh2)] <- 3*h2
+    bh2 <- bh2 - brh2
+    h2 <- h2 + 1; bdh2 <- bdh2 + brh2; brh2 <- brh2 + 1
+  }}
+# intermediary ring
+bm2 <- max(dtgr_tbl2[[terms[2]]])
+m2 <- 1; bdm2 <- 0; brm2 <- 1 # change for number of balls per ring
+if (is_empty(dtgr2$auxxx[dtgr2$cat == terms[2]]) == FALSE) {
+  while (bm2 > 0) {
+    dtgr2$auxxx[dtgr2$cat == terms[2] & (bdm2 < dtgr2$auxx & dtgr2$auxx <= bdm2 + brm2)] <- 3*m2
+    bm2 <- bm2 - brm2
+    m2 <- m2 + 1; bdm2 <- bdm2 + brm2; brm2 <- brm2 + 1
+  }}
+# outer ring
+bl2 <- max(dtgr_tbl2[[terms[1]]])
+l2 <- 1; bdl2 <- 0; brl2 <- 2 # change for number of balls per ring
+if (is_empty(dtgr2$auxxx[dtgr2$cat == terms[1]]) == FALSE) {
+  while (bl2 > 0) {
+    dtgr2$auxxx[dtgr2$cat == terms[1] & (bdl2 < dtgr2$auxx & dtgr2$auxx <= bdl2 + brl2)] <- 3*l2
+    bl2 <- bl2 - brl2
+    l2 <- l2 + 1; bdl2 <- bdl2 + brl2; brl2 <- brl2 + 1
+  }}
+
+dtgr2$catt <- paste0(dtgr2$cat, dtgr2$auxxx)
+levels(dtgr2$catt) <- c(paste0(terms[1], max(ifelse(l2 == 1, 1, 3*(l2-1)), 4):1), 
+                        paste0(terms[2], max(ifelse(m2 == 1, 1, 3*(m2-1)), 4):1), 
+                        paste0(terms[3], max(ifelse(h2 == 1, 1, 3*(h2-1)), 3):0))
+
+dtgr2_aux <- as.data.frame(levels(dtgr2$catt)) %>% 
+  rename(catt = "levels(dtgr2$catt)") %>% 
+  mutate(y = dim(.)[1]:1)
+
+dtgr2 <- dtgr2 %>% 
+  select(any_of(c("gbf_ttl", "nbt_ttl", "cat", "catt")))
+
+dtgr2 <- dtgr2 %>% 
+  mutate(gbf_ttl = droplevels(gbf_ttl)) %>% 
+  filter(complete.cases(.)) %>% 
+  group_by(catt, gbf_ttl) %>% 
+  mutate(n = (row_number() - mean(n()))/n(),
+         n = (n - mean(n))*0.9 + as.numeric(gbf_ttl)) %>% 
+  left_join(dtgr2_aux)
+
+rect2 <- data.frame(x0 = c(0.5, 0.5, 0.5), xn = c(length(slc) + 0.5, length(slc) + 0.5, length(slc) + 0.5), 
+                    y0 = c(max(ifelse(h2 == 1, 1, 3*(h2-1)), 3) + max(ifelse(m2 == 1, 1, 3*(m2-1)), 4) + 3, 
+                           max(ifelse(h2 == 1, 1, 3*(h2-1)), 3) + 2, 
+                           0), 
+                    yn = c(max(ifelse(h2 == 1, 1, 3*(h2-1)), 3) + max(ifelse(m2 == 1, 1, 3*(m2-1)), 4) + max(ifelse(l2 == 1, 1, 3*(l2-1)), 4) + 4, 
+                           max(ifelse(h2 == 1, 1, 3*(h2-1)), 3) + max(ifelse(m2 == 1, 1, 3*(m2-1)), 4) + 3, 
+                           max(ifelse(h2 == 1, 1, 3*(h2-1)), 3) + 2), 
+                    lab = factor(terms, levels = terms))
+```
+
+```{r clean4}
+rm(dtgr_tbl2, dtgr2_aux, bh2, h2, bdh2, brh2, bm2, m2, bdm2, brm2, bl2, l2, bdl2, brl2)
+```
+
+```{r grf_aux3, warning=FALSE, echo=FALSE, message=FALSE}
+# sub-sets data, giving NBT number, GBF Target, category and position (for "flower" plot 3)
+slc <- 16:27
+dtgr_tbl3 <- dtgr_tbl %>% 
+    filter(gbf_ttl %in% levels(dta$gbf_ttl)[slc])
+dtgr3 <- dtgr %>% 
+  filter(gbf_ttl %in% levels(dta$gbf_ttl)[slc])
+dtgr3$auxxx <- NA
+
+# inner ring
+bh3 <- max(dtgr_tbl3[[terms[3]]])
+h3 <- 1; bdh3 <- 0; brh3 <- 1 # change for number of balls per ring
+if (is_empty(dtgr3$auxxx[dtgr3$cat == terms[3]]) == FALSE) {
+  while (bh3 > 0) {
+    dtgr3$auxxx[dtgr3$cat == terms[3] & (bdh3 < dtgr3$auxx & dtgr3$auxx <= bdh3 + brh3)] <- 3*h3
+    bh3 <- bh3 - brh3
+    h3 <- h3 + 1; bdh3 <- bdh3 + brh3; brh3 <- brh3 + 1
+  }}
+# intermediary ring
+bm3 <- max(dtgr_tbl3[[terms[2]]])
+m3 <- 1; bdm3 <- 0; brm3 <- 1 # change for number of balls per ring
+if (is_empty(dtgr3$auxxx[dtgr3$cat == terms[2]]) == FALSE) {
+  while (bm3 > 0) {
+    dtgr3$auxxx[dtgr3$cat == terms[2] & (bdm3 < dtgr3$auxx & dtgr3$auxx <= bdm3 + brm3)] <- 3*m3
+    bm3 <- bm3 - brm3
+    m3 <- m3 + 1; bdm3 <- bdm3 + brm3; brm3 <- brm3 + 1
+  }}
+# outer ring
+bl3 <- max(dtgr_tbl3[[terms[1]]])
+l3 <- 1; bdl3 <- 0; brl3 <- 5 # change for number of balls per ring
+if (is_empty(dtgr3$auxxx[dtgr3$cat == terms[1]]) == FALSE) {
+  while (bl3 > 0) {
+    dtgr3$auxxx[dtgr3$cat == terms[1] & (bdl3 < dtgr3$auxx & dtgr3$auxx <= bdl3 + brl3)] <- 3*l3
+    bl3 <- bl3 - brl3
+    l3 <- l3 + 1; bdl3 <- bdl3 + brl3; brl3 <- brl3 + 1
+  }}
+
+dtgr3$catt <- paste0(dtgr3$cat, dtgr3$auxxx)
+levels(dtgr3$catt) <- c(paste0(terms[1], max(ifelse(l3 == 1, 1, 3*(l3-1)), 4):1), 
+                        paste0(terms[2], max(ifelse(m3 == 1, 1, 3*(m3-1)), 4):1), 
+                        paste0(terms[3], max(ifelse(h3 == 1, 1, 3*(h3-1)), 3):0))
+
+dtgr3_aux <- as.data.frame(levels(dtgr3$catt)) %>% 
+  rename(catt = "levels(dtgr3$catt)") %>% 
+  mutate(y = dim(.)[1]:1)
+
+dtgr3 <- dtgr3 %>% 
+  select(any_of(c("gbf_ttl", "nbt_ttl", "cat", "catt")))
+
+dtgr3 <- dtgr3 %>% 
+  mutate(#catt = fct_rev(catt), 
+         #catt = replace(catt, catt == "NA", NA), 
+         gbf_ttl = droplevels(gbf_ttl)) %>% 
+  filter(complete.cases(.)) %>% 
+  group_by(catt, gbf_ttl) %>% 
+  mutate(n = (row_number() - mean(n()))/n(),
+         n = (n - mean(n))*0.9 + as.numeric(gbf_ttl)) %>% 
+  #mutate(y = as.numeric(catt)) %>% 
+  left_join(dtgr3_aux)
+
+rect3 <- data.frame(x0 = c(0.5, 0.5, 0.5), xn = c(length(slc) + 0.5, length(slc) + 0.5, length(slc) + 0.5), 
+                    y0 = c(max(ifelse(h3 == 1, 1, 3*(h3-1)), 3) + max(ifelse(m3 == 1, 1, 3*(m3-1)), 4) + 3, 
+                           max(ifelse(h3 == 1, 1, 3*(h3-1)), 3) + 2, 
+                           0), 
+                    yn = c(max(ifelse(h3 == 1, 1, 3*(h3-1)), 3) + max(ifelse(m3 == 1, 1, 3*(m3-1)), 4) + max(ifelse(l3 == 1, 1, 3*(l3-1)), 4) + 4, 
+                           max(ifelse(h3 == 1, 1, 3*(h3-1)), 3) + max(ifelse(m3 == 1, 1, 3*(m3-1)), 4) + 3, 
+                           max(ifelse(h3 == 1, 1, 3*(h3-1)), 3) + 2), 
+                    lab = factor(terms, levels = terms))
+```
+
+```{r clean5}
+rm(dtgr_tbl3, dtgr3_aux, bh3, h3, bdh3, brh3, bm3, m3, bdm3, brm3, bl3, l3, bdl3, brl3)
+```
+
+```{r}
+fill3 <- ifelse(params$nbsap == TRUE, paste0(params$country, '’s'), "the")
+```
+
+::: {custom-style="Text"}
+The analysis indicates that `r text_aux` of the goals of the Kunming-Montreal Global Biodiversity Framework `r ifelse(text_aux == 1, "has", "have")` at least one parallel `r nbtalt` of `r tolower(terms[3])`, `r tolower(terms[2])`, or `r tolower(terms[1])` `r tolower(term)`. Of `r fill3` `r nbr` `r nbtalt`, `r dtgr000$gbf_ttl[1]` has the highest number of similar targets (`r dtgr000$n[1]`), followed by `r dtgr000$gbf_ttl[2]` (`r dtgr000$n[2]`), and `r dtgr000$gbf_ttl[3]` (`r dtgr000$n[3]`). `r goals1`. Of the `r sum(dtgr0$n)` `r ifelse(sum(dtgr0$n) == 1, "pair", "pairs")` of global goals and `r nbtalt` with some `r tolower(term)`, approximately `r round(100*sum(dtgr0[9:12, 3])/sum(dtgr0$n), 0)`% have `r tolower(terms[3])` `r tolower(term)`, `r round(100*sum(dtgr0[5:8, 3])/sum(dtgr0$n), 0)`% have `r tolower(terms[2])` `r tolower(term)` and `r round(100*sum(dtgr0[1:4, 3])/sum(dtgr0$n), 0)`% have `r tolower(terms[1])` `r tolower(term)`.
+
+Figure \@ref(fig:fig1) below represents these findings, where the slices represent the four goals of the Framework and the three rings in tones of green represent the level of `r tolower(term)` - `r tolower(terms[1])`, `r tolower(terms[2])` and `r tolower(terms[3])`. The white circles correspond to `r nbtalt` and are placed on the graph according to their level of `r tolower(term)` with the respective goal of the Framework. 
+:::
+
+```{r plot1, echo=FALSE, warning=FALSE, fig.align="center", fig.width=6, fig.retina=8, fig.cap=paste0(" ", term, " between ", nbtalt, " and the global biodiversity goals of the Kunming-Montreal Global Biodiversity Framework"), fig.id="fig1", fig.cap.pre="Figure "}
+# "flower" figure 1
+ggplot() + 
+geom_rect(data = rect1, 
+          mapping = aes(xmin = x0, xmax = xn, ymin = y0, ymax = yn, 
+          fill = lab)) + 
+scale_fill_manual(term,
+                  values = unname(cols[-4])) +
+geom_vline(xintercept = seq(0.5, 3.5, 1)) + 
+    geom_point(data = dtgr1, aes(n, y, color = "black"), 
+               size = b_size, fill = "white", shape = 21,  # ball size
+               key_glyph = "cust") + 
+      geom_text(data = dtgr1, aes(n, y, label = nbt_ttl), 
+                size = bt_size) + # ball text size
+      scale_color_manual("", values = "black", 
+                         labels = paste0(gsub(" ", "\n", str_to_title(substr(nbtalt, 1, nchar(as.character(nbtalt))-1))), "\nnumber")) + 
+scale_x_continuous(breaks = 1:4, 
+                   labels = levels(dtgr1$gbf_ttl)[1:4]) + 
+coord_curvedpolar() + 
+theme_void() + 
+guides(color = guide_legend(override.aes = list(size = 15))) + 
+theme(axis.text.x = element_text(size = 20, face = 2), 
+      legend.title = element_text(size=14), 
+      legend.text = element_text(size=12))
+```
+
+```{r clean6, echo=FALSE, warning=FALSE}
+rm(dtgr0, idtgr, nbr, text_aux, dtgr1, rect1, goals1)
+```
+
+::: {custom-style="Col1"}
+**How** to use
+:::
+
+::: {custom-style="Heading 2"}
+Applications of this policy summary and next steps
+:::
+
+<br>
+
+::: {custom-style="Text"}
+This policy summary is meant to serve as a guiding resource that Parties may wish to consider as they take early action to align their `r nbtalt` with the Kunming‐Montreal Global Biodiversity Framework goals and targets. The findings included in this national summary  are intended for use at your country’s discretion to support preparation of Annex I “Guidance for revising or updating national biodiversity strategies and action plans to align with the Kunming‐Montreal Global Biodiversity Framework” in  ["15/6 Mechanisms for planning, monitoring, reporting, and review"](https://www.cbd.int/doc/decisions/cop-15/cop-15-dec-06-en.pdf) and related target `r tolower(term)` information. **The results will not be shared publicly without permission.** It is recommended that countries validate the results and use them in conjunction with rich stakeholder engagement processes. 
+
+UNDP is collecting feedback and recommendations on how to improve these assessments in order to ensure that they are as accurate and useful as possible. Country feedback on the data in this assessment and its presentation is requested, as well as suggestions on the type of support that would help the county use the results. Please contact Lea Phillips ([lea.phillips@undp.org](lea.phillips@undp.org)) for questions and feedback.
+:::
+
+<br>
+
+```{r txt_aux_s1, include=FALSE}
+# sub-sets the data, giving a count of similarities by category (incl. none) by NBT
+dtan <- dta %>% 
+  select(nbt_ttl, cat) %>% 
+  mutate(one = 1) %>% 
+  group_by(nbt_ttl, cat) %>% 
+  summarise(n = sum(one)) %>% 
+  pivot_wider(names_from = cat, values_from = n)
+
+# correct the issue when one of the categoies has 0 cases
+coldif <- setdiff(c("nbt_ttl", "None", "Low", "Medium", "High"), colnames(dtan))
+if (length(colnames(dtan)) < 5){
+  for (i in 1:(5 - length(colnames(dtan)))){
+    dtan[ , paste0("coldif", i)] <- NA
+  }
+}
+
+# ... calculates percentages
+colnames(dtan) <- c("nbt_ttl", "None", "Low", "Medium", "High")
+dtan$'None' <- round(100*dtan$'None'/27, 0)
+dtan$'Low' <- round(100*dtan$'Low'/27, 0)
+dtan$'Medium' <- round(100*dtan$'Medium'/27, 0)
+dtan$'High' <- round(100*dtan$'High'/27, 0)
+
+# ... just the GBF Targets
+dtaaaa <- dtaaa %>% 
+  filter(!(gbf_ttl %in% levels(dta$gbf_ttl)[1:4]))
+
+# sub-set of the data, giving the cont of pairings with alignment, by category (just the BF Targets)
+dta0 <- dtaa %>% 
+  filter(!(gbf_ttl %in% levels(dta$gbf_ttl)[1:4])) %>% 
+  select(-gbf_ttl) %>% 
+  group_by(cat) %>% 
+  summarise(n = sum(n))
+```
+
+```{r clean6_s, echo=FALSE}
+rm(dtan, coldif)
+```
+
+::: {custom-style="Col1"}
+What we **found** - Global Targets
+:::
+
+::: {custom-style="Heading 2"}
+`r term` between `r fill0` and the 23 Kunming-Montreal Global Biodiversity Framework targets
+:::
+
+<br>
+
+```{r txt_aux_s2, include=FALSE}
+# number of NBTs with HIGH alignment
+if(filter(dta0, cat == terms[3])$n == 1){
+  targets1 <- paste0(filter(dta0, cat == terms[3])$n, " has ", tolower(terms[3]), " ", tolower(term))
+} else {
+  targets1 <- paste0(filter(dta0, cat == terms[3])$n, " have ", tolower(terms[3]), " ", tolower(term))
+}
+
+# number of NBTs with MEDIUM alignment
+if(filter(dta0, cat == terms[2])$n == 1){
+  targets2 <- paste0(filter(dta0, cat == terms[2])$n, " has ", tolower(terms[2]), " ", tolower(term))
+} else {
+  targets2 <- paste0(filter(dta0, cat == terms[2])$n, " have ", tolower(terms[2]), " ", tolower(term))
+}
+
+# number of NBTs with LOW alignment
+if(filter(dta0, cat == terms[1])$n == 1){
+  targets3 <- paste0(filter(dta0, cat == terms[1])$n, " has ", tolower(terms[1]), " ", tolower(term))
+} else {
+  targets3 <- paste0(filter(dta0, cat == terms[1])$n, " have ", tolower(terms[1]), " ", tolower(term))
+}
+```
+
+::: {custom-style="Text"}
+The analysis indicates that `r 23 - length(dtgr_d$gbf_ttl)` of the 23 targets of the Kunming-Montreal Global Biodiversity Framework `r ifelse(length(dtgr_d$gbf_ttl) == 22, "has", "have")` at least one parallel `r nbtalt`. `r dtaaaa$gbf_ttl[1]` has the highest number of aligned `r nbtalt` (`r dtaaaa$n[1]`), followed by `r dtaaaa$gbf_ttl[2]` (`r dtaaaa$n[2]`), and `r dtaaaa$gbf_ttl[3]` (`r dtaaaa$n[3]`). Of the `r sum(dta0$n)` pairs of `r nbtalt` and global targets with some `r tolower(term)`, `r targets1`, `r targets2`, and `r targets3`. `r txt`
+
+The 23 targets from the Framework are split into Figure \@ref(fig:fig2) - covering Targets 1-11 - and Figure \@ref(fig:fig3) - covering Targets 12-23. Each segment of the chart represents a global target and the numbered white circles represent `r nbtalt`.
+:::
+
+```{r clean6_ss, echo=FALSE}
+rm(dtgr_d, txt, dtgr000, targets1, targets2, targets3, dta0, dtaaaa)
+```
+
+```{r formating1}
+# portrait orientation, hitherto
+block_section(sec_port)
+```
+
+```{r plot2, echo=FALSE, warning=FALSE, fig.align="center", fig.width=11, fig.height=7, fig.retina=8, fig.cap=paste0(" ", term, " between ", nbtalt, " and Targets 1-11 of the Kunming-Montreal Global Biodiversity Framework"), fig.id="fig2", fig.cap.pre="Figure "}
+# "flower" figure 2
+ggplot() + 
+geom_rect(data = rect2, 
+          mapping = aes(xmin = x0, xmax = xn, ymin = y0, ymax = yn, 
+          fill = lab)) + 
+scale_fill_manual(term,
+                  values = unname(cols[-4])) +
+geom_vline(xintercept = seq(0.5, 10.5, 1)) + 
+    geom_point(data = dtgr2, aes(n, y, color = "black"), 
+               size = b_size, fill = "white", shape = 21,  # ball size
+               key_glyph = "cust") +
+    geom_text(data = dtgr2, aes(n, y, label = nbt_ttl), 
+              size = bt_size) + # ball text size
+    scale_color_manual("", values = "black", 
+                       labels = paste0(gsub(" ", "\n", str_to_title(substr(nbtalt, 1, nchar(as.character(nbtalt))-1))), "\nnumber")) + 
+scale_x_continuous(breaks = 1:11, 
+                   labels = levels(dtgr2$gbf_ttl)[1:11]) + 
+coord_curvedpolar() + 
+theme_void() + 
+guides(color = guide_legend(override.aes = list(size = 15))) + 
+theme(axis.text.x = element_text(size = 20, face = 2), 
+      legend.title = element_text(size=14), 
+      legend.text = element_text(size=12))
+```
+
+```{r clean7, echo=FALSE}
+rm(rect2, dtgr2)
+```
+
+```{r plot3, echo=FALSE, warning=FALSE, fig.align="center", fig.width=11, fig.height=7, fig.retina=8, fig.cap=paste0(" ", term, " between ", nbtalt, " and Targets 12-23 of the Kunming-Montreal Global Biodiversity Framework"), fig.id="fig3", fig.cap.pre="Figure "}
+# "flower" figure 3
+ggplot() + 
+geom_rect(data = rect3, 
+          mapping = aes(xmin = x0, xmax = xn, ymin = y0, ymax = yn, 
+          fill = lab)) + 
+scale_fill_manual(term,
+                  values = unname(cols[-4])) +
+geom_vline(xintercept = seq(0.5, 11.5, 1)) + 
+    geom_point(data = dtgr3, aes(n, y, color = "black"), 
+               size = b_size, fill = "white", shape = 21,  # ball size (9)
+               key_glyph = "cust") +
+    geom_text(data = dtgr3, aes(n, y, label = nbt_ttl), 
+              size = bt_size) + # ball text size (3)
+scale_color_manual("", values = "black", 
+                   labels = paste0(gsub(" ", "\n", str_to_title(substr(nbtalt, 1, nchar(as.character(nbtalt))-1))), "\nnumber")) + 
+scale_x_continuous(breaks = 1:12, 
+                   labels = levels(dtgr3$gbf_ttl)[1:12]) + 
+coord_curvedpolar() + 
+theme_void() + 
+guides(color = guide_legend(override.aes = list(size = 15))) + 
+theme(axis.text.x = element_text(size = 20, face = 2), 
+      legend.title = element_text(size=14), 
+      legend.text = element_text(size=12))
+```
+
+```{r clean8, echo=FALSE}
+rm(rect3, dtgr3)
+```
+
+```{r formating2}
+# landscape orientation, hitherto
+block_section(sec_land)
+```
+
+::: {custom-style="Heading 2"}
+Overall `r tolower(term)` of the `r nbtalt` with the four goals and 23 targets of the Kunming-Montreal Global Biodiversity Framework
+:::
+
+<br>
+
+::: {custom-style="Text"}
+Figure \@ref(fig:fig4) below summarizes the analysis by providing an overview of `r tolower(term)` for the four goals and 23 targets. Each column refers to one global goal or target and the height of the column corresponds to the number of `r nbtalt` with which each of these share some `r tolower(term)`. `r dtaaa$gbf_ttl[1]`, `r dtaaa$gbf_ttl[2]`, and `r dtaaa$gbf_ttl[3]` are the highest columns and therefore have the largest number of aligned `r nbtalt`. Conversely, the global goals and targets with the lowest number of `r nbtalt` with some `r tolower(term)` are `r dtaaa$gbf_ttl[length(dtaaa$gbf_ttl)-2]`, `r dtaaa$gbf_ttl[length(dtaaa$gbf_ttl)-1]`, and `r dtaaa$gbf_ttl[length(dtaaa$gbf_ttl)]`. This figure can guide national efforts to better align pairs of `r nbtalt` and global targets with `r terms[2]` (`r dtax$n[2]`) and `r terms[1]` `r tolower(term)` (`r dtax$n[1]`). Table \@ref(tab:tbl1) also represents these results in more detail.
+:::
+
+<br>
+
+```{r plot4, fig.width=6, fig.asp=3/5, fig.align="center", echo = FALSE, warning = FALSE, fig.retina=8, fig.cap=paste0(" Goals and targets of the Kunming-Montreal Global Biodiversity Framework that have a ",  tolower(terms[1]), ", ", tolower(terms[2]), ", or ", tolower(terms[3]), " ", tolower(term), " with ", nbtalt), fig.id="fig4", fig.cap.pre="Figure "}
+# bar figure
+ggplot(dtaa, aes(x = gbf_ttl, y = n, fill = cat)) +
+  geom_bar(stat = "identity", colour = "black") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) + 
+  scale_y_continuous(expand = c(0, 0)) + 
+  scale_fill_manual(values = unname(cols[-4])) + 
+  labs(x = "Global goals and targets", 
+       y = paste0("Number of national targets with ", tolower(term), "\nto each of the global goals and targets"), 
+       fill = term) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 8), 
+        axis.title = element_text(face = "bold", size = 8), axis.text = element_text(size = 7), 
+        legend.title = element_text(face = "bold", size = 10), legend.text = element_text(size = 9), 
+        legend.position = "bottom", 
+        panel.background = element_blank(), 
+        panel.grid.major.y = element_line(), panel.grid.major.x = element_blank()
+        )
+```
+
+\newpage
+
+```{r tbl_aux, include = FALSE}
+# builds table
+## sub-sets the data, giving GBF Goals and Targets (rows), Low, Medium High (columns)
+tbl <- dta %>% 
+  select(nbt_ttl, gbf_ttl, cat) %>% 
+  pivot_wider(names_from = cat, values_from = nbt_ttl) %>% 
+  select(-termss)
+tbl_dif <- setdiff(terms, colnames(tbl)[-1])
+if (length(tbl_dif) >= 1){
+  for (i in 1:length(tbl_dif)){
+  tbl <- tbl %>% 
+    mutate(cat = NA) %>% 
+    rename(!!tbl_dif[i] := cat)
+}
+}
+
+# ... column Low
+if (is.null(select(tbl, terms[1]))){
+  tbl_l <- data.frame("gbf_ttl" = character(), cat = character()) %>% 
+    rename(!!terms[1] := cat)
+} else {
+tbl_l <- tbl %>% select(gbf_ttl, terms[1]) %>% unnest(terms[1]) %>% 
+  group_by(gbf_ttl) %>% mutate(cat = toString(sort(unique(get(terms[1]))))) %>% 
+  select(-2) %>% 
+  rename(!!terms[1] := cat) %>% 
+  unique()
+}
+
+# ... column Medium
+if (is.null(select(tbl, terms[2]))){
+  tbl_m <- data.frame("gbf_ttl" = character(), cat = character()) %>% 
+    rename(!!terms[2] := cat)
+} else {
+tbl_m <- tbl %>% select(gbf_ttl, terms[2]) %>% unnest(terms[2]) %>% 
+  group_by(gbf_ttl) %>% mutate(cat = toString(sort(unique(get(terms[2]))))) %>% 
+  select(-2) %>% 
+  rename(!!terms[2] := cat) %>% 
+  unique()
+}
+
+# ... column High
+if (is.null(select(tbl, terms[3]))){
+  tbl_h <- data.frame("gbf_ttl" = character(), cat = character()) %>% 
+    rename(!!terms[3] := cat)
+} else {
+tbl_h <- tbl %>% select(gbf_ttl, terms[3]) %>% unnest(terms[3]) %>% 
+  group_by(gbf_ttl) %>% mutate(cat = toString(sort(unique(get(terms[3]))))) %>% 
+  select(-2) %>% 
+  rename(!!terms[3] := cat) %>% 
+  unique()
+} 
+
+# ...joins the above
+tbl <- tbl %>% select(gbf_ttl) %>% 
+  left_join(tbl_h) %>% 
+  left_join(tbl_m) %>% 
+  left_join(tbl_l) %>% 
+  rename("Global goal or target" = gbf_ttl)
+tbl[is.na(tbl)] = ""
+```
+
+```{r tbl, echo = FALSE, warning = FALSE, tab.cap=paste0(" Expanded overview of ", tolower(term), " between the goals and targets of the Kunming-Montreal Global Biodiversity Framework and the ", nbtalt), tab.id="tbl1", tab.cap.pre="Table", tab.autonum.start_at=1}
+# creates Table
+tbl %>% flextable(cwidth = c(1.2, 1.6, 1.6, 1.6)) %>% 
+  bg(part = "header", j = c(1, 2, 3, 4), bg = append("black", rev(cols[-4]))) %>% 
+  color(part = "header", i = 1, j = 1, color = "white") %>% # i = 2
+  color(part = "header", i = 1, j = c(2, 3, 4), color = "black") %>% # i = 2
+  align(part = "header", align = "center") %>% 
+  bold(part = "header") %>% 
+  bold(part = "body", j = 1) %>% 
+  hline(part = "all")
+```
+
+```{r clean9, echo=FALSE}
+rm(dtaa, dtax, dtaaa, tbl, tbl_l, tbl_m, tbl_h, tbl_dif)
+```
+
+```{r formating3}
+# portrait orientation, hitherto
+block_section(sec_port)
+```
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+<br>
+
+___
+::: {custom-style="Text"}
+_The structure and design of this Policy Summary is modeled after the "`r term` Analysis of Costa Rica's National Biodiversity Strategy with the Kunming-Montreal Global Biodiversity Framework", published by UNDP Costa Rica and the Costa Rican Ministry of the Environment and Energy (MINAE) and authored by Roxana L. García Huezo._
+:::
+
+::: {custom-style="Heading 1"}
+# Appendix 1: `r str_to_title(fill0)`
+:::
+
+```{r tbl_nbt, echo=FALSE, warning=FALSE, tab.cap=""}
+# sub-sets the data, isolating the NBTs
+nbt_df <- dta %>% 
+  select(nbt_title, nbt_ttl, nbt_txt, nbt_n) %>% 
+  unique() %>% 
+  #arrange(nbt_n) %>% 
+  select(-nbt_n) %>% 
+  mutate(nbt_ttl = ifelse(nbt_ttl == nbt_title, nbt_title, paste0(nbt_title, " (", nbt_ttl, ")"))) %>% 
+  select(-nbt_title) %>% 
+  add_row(nbt_ttl = str_to_title(nbtalt), 
+          nbt_txt = "", .before = 1)
+
+# Appendix 1 table
+nbt_df %>% flextable(cwidth = c(0.8, 5.2)) %>% 
+  delete_part(part = "header") %>% 
+  merge_at(i = 1, j = c(1, 2), part = "body") %>% 
+  bg(part = "body", i = 1, bg = "#00A54A") %>% 
+  color(part = "body", i = 1, color = "white") %>% 
+  bold(part = "body", i = 1) %>% 
+  italic(part = "body", j = 2) %>% 
+  bold(part = "body", j = 1) %>% 
+  valign(valign = "top") %>% 
+  align(part = "body", align = "justify")
+```
+
+\newpage
+
+::: {custom-style="Heading 1"}
+# Appendix 2: Goals and Targets of the Kunming-Montreal Global Biodiversity Framework
+:::
+
+```{r tbl_gbf, echo = FALSE, warning=FALSE, tab.cap=""}
+# sub-sets the data, isolating the GBF Goals or Targets
+gbf_df <- dta %>% 
+  select(gbf_ttl, gbf_txt) %>% 
+  unique() %>% 
+  mutate(gbf_txt = trimws(gbf_txt)) %>% 
+  add_row(gbf_ttl = "Global Goals: Kunming-Montreal Global Biodiversity Framework", 
+          gbf_txt = "", .before = 1) %>% 
+  add_row(gbf_ttl = "Global Targets: Kunming-Montreal Global Biodiversity Framework", 
+          gbf_txt = "", .before = 6)
+
+# Appendix 2 table
+gbf_df %>% flextable(cwidth = c(0.7, 5.3)) %>% 
+  delete_part(part = "header") %>% 
+  merge_at(i = 1, j = c(1, 2), part = "body") %>% 
+  bg(part = "body", i = 1, bg = "#00A54A") %>% 
+  color(part = "body", i = 1, color = "white") %>% 
+  bold(part = "body", i = 1) %>% 
+  merge_at(i = 6, j = c(1, 2), part = "body") %>% 
+  bg(part = "body", i = 6, bg = "#00A54A") %>% 
+  color(part = "body", i = 6, color = "white") %>% 
+  bold(part = "body", i = 6) %>% 
+  italic(part = "body", j = 2) %>% 
+  bold(part = "body", j = 1) %>% 
+  valign(valign = "top") %>% 
+  align(part = "body", align = "justify")
+```
